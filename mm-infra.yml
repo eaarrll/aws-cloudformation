@@ -1,0 +1,597 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+    This template deploys a VPC, with a pair of public and private subnets spread 
+    across two ( Zone A, Zone B)  Availabilty Zones. It deploys an Internet Gateway,
+    with a default route on the public subnets. It deploy NAT Gateway (in 2 public AZ), 
+    and default routes for them in the private subnets.
+    
+Parameters:
+
+  DBMasterUser:
+    Description: "Minimum 6 Alphanumeric characters only"
+    Type: "String"
+
+  DBMasterPassword:
+    Description: "Minimum 8 Alphanumeric characters only"
+    Type: "String"
+
+
+Resources:
+####### Create VPC ##########
+  MaamMainVPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      Tags:
+      - Key: "Name"
+        Value: "maam-main-vpc"
+
+####### Create Public Subnet #######
+  MaamPub1a:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      CidrBlock: "10.0.1.0/24"
+      AvailabilityZone: !Select [ '0', !GetAZs ]
+      MapPublicIpOnLaunch: "True"
+      Tags:
+      - Key: "Name"
+        Value: "maam-pub-1a"
+
+  MaamPub1b:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      CidrBlock: "10.0.2.0/24"
+      AvailabilityZone: !Select [ '1', !GetAZs ]
+      MapPublicIpOnLaunch: "True"
+      Tags:
+      - Key: "Name"
+        Value: "maam-pub-1b"
+
+######## Create Private Subnet #######
+  MaamPri1a:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      CidrBlock: "10.0.3.0/24"
+      AvailabilityZone: !Select [ '0', !GetAZs ]
+      Tags:
+      - Key: "Name"
+        Value: "maam-pri-1a"
+
+  MaamPri1b:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      CidrBlock: "10.0.4.0/24"
+      AvailabilityZone: !Select [ '1', !GetAZs ]
+      Tags:
+      - Key: "Name"
+        Value: "maam-pri-1b"
+
+######## Create Internet Gateway #######
+  MaamInternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+      - Key: "Name"
+        Value: "maam-igw"
+
+######## Attach Internet Gateway to VPC #######
+  MaamGatewayToInternet:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      InternetGatewayId: !Ref "MaamInternetGateway"
+
+######## Create Public Route Table #######
+  MaamPublicRouteTable1:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+      - Key: "Name"
+        Value: "maam-pub-rt-1"
+
+  MaamPublicRouteTable2:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+      - Key: "Name"
+        Value: "maam-pub-rt-2"
+
+######## Create Private Route Table #######
+  MaamPrivateRouteTable1:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+      - Key: "Name"
+        Value: "maam-pri-rt-1"
+
+  MaamPrivateRouteTable2:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+      - Key: "Name"
+        Value: "maam-pri-rt-2"
+
+######## Route-out Public Route Table to Internet Gateway (Internet connection)  #######
+  MaamPublicRouteIGW1:
+    Type: "AWS::EC2::Route"
+    DependsOn: "MaamGatewayToInternet"
+    Properties:
+      RouteTableId: !Ref "MaamPublicRouteTable1"
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref "MaamInternetGateway"
+
+  MaamPublicRouteIGW2:
+    Type: "AWS::EC2::Route"
+    DependsOn: "MaamGatewayToInternet"
+    Properties:
+      RouteTableId: !Ref "MaamPublicRouteTable2"
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref "MaamInternetGateway"
+
+######## Associate Public Route Table with Public Subnet1 & Subnet2 #######
+  MaamPublicSubnet1RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref "MaamPub1a"
+      RouteTableId: !Ref "MaamPublicRouteTable1"
+
+  MaamPublicSubnet2RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref "MaamPub1b"
+      RouteTableId: !Ref "MaamPublicRouteTable2"
+
+######## Associate Private Route Table with Private Subnet1 & Subnet2 #######
+  MaamPrivateSubnet1RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref "MaamPri1a"
+      RouteTableId: !Ref "MaamPrivateRouteTable1"
+
+  MaamPrivateSubnet2RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref "MaamPri1b"
+      RouteTableId: !Ref "MaamPrivateRouteTable2"
+
+######## Create Nat Gateway in Public Subnet #######
+######## Allocate Elastic IP to Nat Gateway #######
+######## Target Private Route Table with Nat Gateway #######
+
+  MaamNATGateway1EIP:
+    Type: "AWS::EC2::EIP"
+    DependsOn: "MaamGatewayToInternet"
+    Properties:
+      Domain: "vpc"
+
+  MaamNATGateway2EIP:
+    Type: "AWS::EC2::EIP"
+    DependsOn: "MaamGatewayToInternet"
+    Properties:
+      Domain: "vpc"
+  
+  MaamNATGateway1:
+    Type: "AWS::EC2::NatGateway"
+    DependsOn: "MaamGatewayToInternet"
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - "MaamNATGateway1EIP"
+        - "AllocationId"  
+      SubnetId: !Ref "MaamPub1a"
+
+  MaamNATGateway2:
+    Type: "AWS::EC2::NatGateway"
+    DependsOn: "MaamGatewayToInternet"
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - "MaamNATGateway2EIP"
+        - "AllocationId"  
+      SubnetId: !Ref "MaamPub1b"
+
+  MaamNatPrivateRoute1:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref "MaamPrivateRouteTable1"
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref "MaamNATGateway1"
+
+  MaamNatPrivateRoute2:
+    Type: "AWS::EC2::Route"
+    Properties:
+      RouteTableId: !Ref "MaamPrivateRouteTable2"
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref "MaamNATGateway2"
+
+######## Create Bastion Host in Public Subnet 1##########
+  MaamBastion:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      Tags:
+      - Key: "Name"
+        Value: "maam-bastion"
+      ImageId: "ami-0ce71448843cb18a1"
+      InstanceType: "t2.nano"
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          NetworkInterfaceId: !Ref BastionNetworkInterface
+      KeyName: "maam-bastion"
+    DependsOn: "MaamBastionSG" 
+
+############# Create Security Group for Bastion ###################
+  MaamBastionSG:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security Group for Bastion node"
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+        - Key: "Name"
+          Value: "maam-bastion"
+    DependsOn: "MaamMainVPC"
+
+############## Create and Allocate EIP for Bastion ###############
+  BastionEIP:
+      Type: "AWS::EC2::EIP"
+      Properties:
+        Domain: "vpc"
+
+  BastionEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt BastionEIP.AllocationId
+      NetworkInterfaceId: !Ref BastionNetworkInterface
+    DependsOn:
+      - BastionEIP
+      - BastionNetworkInterface
+      - MaamBastionSG
+
+############## Create Network Interface for Bastion ##########
+  BastionNetworkInterface:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId: !Ref "MaamPub1a"
+      GroupSet:
+        - !Ref "MaamBastionSG"
+      SourceDestCheck: true
+
+########## Create Security Group for App Servers ###########
+  AppSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security Group for App nodes"
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref "MaamELBSG"
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        #- CidrIp: !Join [ "", [!Ref "BastionEIP", "/24"]]
+        - CidrIp: !Join [ "/", [!GetAtt [ "MaamBastion", PrivateIp ], "24"]]
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+        - Key: "Name"
+          Value: "maam-app"
+    DependsOn: "MaamMainVPC"
+
+########## Create DB Subnet Group ###########
+  MaamAppMysqlSubnet:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: "Subnet Group for DB"
+      SubnetIds: 
+        - !Ref "MaamPri1a"
+        - !Ref "MaamPri1b"
+
+######### Create DB Security Group ##########
+  MaamAppMySQLSG:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security Group for DB nodes"
+      SecurityGroupIngress:
+        - CidrIp: 10.0.3.0/24
+          FromPort: 3306
+          IpProtocol: tcp
+          ToPort: 3306
+        - CidrIp: 10.0.4.0/24
+          FromPort: 3306
+          IpProtocol: tcp
+          ToPort: 3306
+      Tags:
+          - Key: "Name"
+            Value: "maam-app-mysql"
+      VpcId: !Ref "MaamMainVPC"
+
+########## Create DB Instances ###############
+  MaamDBStg:
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      AllocatedStorage: "100"
+      DBName: "maam"
+      DBInstanceClass: "db.t2.small"
+      DBSubnetGroupName: !Ref "MaamAppMysqlSubnet"
+      Engine: "mysql"
+      MasterUsername: !Ref "DBMasterUser"
+      MasterUserPassword: !Ref "DBMasterPassword"
+      VPCSecurityGroups: 
+        - !GetAtt [ "MaamAppMySQLSG", GroupId ] 
+      PubliclyAccessible: "false"
+       Tags:
+          - Key: "Name"
+            Value: "maam-db-stg"
+
+  MaamDBPrd:
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      AllocatedStorage: "100"
+      DBName: "maam"
+      DBInstanceClass: "db.t2.small"
+      DBSubnetGroupName: !Ref "MaamAppMysqlSubnet"
+      Engine: "mysql"
+      MasterUsername: !Ref "DBMasterUser"
+      MasterUserPassword: !Ref "DBMasterPassword"
+      VPCSecurityGroups: 
+        - !GetAtt [ "MaamAppMySQLSG", GroupId ]
+      PubliclyAccessible: "false"
+       Tags:
+          - Key: "Name"
+            Value: "maam-db-prd"
+
+######## Load Balancer Security Group ##########
+  MaamELBSG:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security Group for Load Balancers"
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: 0.0.0.0/0
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      Tags:
+          - Key: "Name"
+            Value: "maam-app-lb"
+      VpcId: !Ref "MaamMainVPC"
+
+
+######## Load Balancer 1 ###########
+  MaamLoadBalancerPri1a:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Subnets:
+        - !Ref "MaamPri1a"
+        - !Ref "MaamPri1b"
+      SecurityGroups:
+        - !Ref "MaamELBSG"
+      IpAddressType: ipv4
+      Tags:
+          - Key: "ENVIRONMENT"
+            Value: "STG"
+    DependsOn: MaamPublicRouteIGW1  
+  MaamTargetGroup1a:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Name: "maam-targetgroup-stg"
+      Port: 80
+      Protocol: HTTP
+      # Targets:
+      #   - Id: !GetAtt [ "MaamPri1a", Cidr ]
+      # TargetType: ip
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+          - Key: "ENVIRONMENT"
+            Value: "STG"
+  MaamListener1a:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+        DefaultActions: 
+          - 
+            Type: "forward"
+            TargetGroupArn: 
+              Ref: "MaamTargetGroup1a"
+        LoadBalancerArn:    
+          Ref: MaamLoadBalancerPri1a
+        Port: '80'
+        Protocol: HTTP
+    DependsOn:
+      - MaamLoadBalancerPri1a
+
+######## Load Balancer 2 #########
+  MaamLoadBalancerPri1b:
+      Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+      Properties:
+        Subnets:
+          - !Ref "MaamPri1a"
+          - !Ref "MaamPri1b"
+        SecurityGroups:
+          - !Ref "MaamELBSG"
+        IpAddressType: ipv4
+        Tags:
+          - Key: "ENVIRONMENT"
+            Value: "PRD"
+      DependsOn: MaamPublicRouteIGW2  
+  MaamTargetGroup1b:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Name: "maam-targetgroup-prd"
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref "MaamMainVPC"
+      Tags:
+          - Key: "ENVIRONMENT"
+            Value: "PRD"
+  MaamListener1b:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+        DefaultActions: 
+          - 
+            Type: "forward"
+            TargetGroupArn: 
+              Ref: "MaamTargetGroup1b"
+        LoadBalancerArn:    
+          Ref: MaamLoadBalancerPri1b
+        Port: '80'
+        Protocol: HTTP
+    DependsOn:
+      - MaamLoadBalancerPri1b
+
+##### Launch Config #######
+  LaunchConfig:
+      Type: "AWS::AutoScaling::LaunchConfiguration"
+      Metadata:
+        Comment: "Install CloudWatch Agent"
+        AWS::CloudFormation::Init:
+          configSets:
+            default:
+              - 01_setupCfnHup
+              - 02_config-amazon-cloudwatch-agent
+              - 03_restart_amazon-cloudwatch-agent
+            UpdateEnvironment:
+              - 02_config-amazon-cloudwatch-agent
+              - 03_restart_amazon-cloudwatch-agent
+          # Definition of json configuration of AmazonCloudWatchAgent, you can change the configuration below.
+          02_config-amazon-cloudwatch-agent:
+            files:
+              '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json':
+                content: !Sub |
+                  {
+                    "metrics": {
+                      "append_dimensions": {
+                        "AutoScalingGroupName": "${!aws:AutoScalingGroupName}",
+                        "ImageId": "${!aws:ImageId}",
+                        "InstanceId": "${!aws:InstanceId}",
+                        "InstanceType": "${!aws:InstanceType}"
+                      },
+                      "metrics_collected": {
+                        "mem": {
+                          "measurement": [
+                            "mem_used_percent"
+                          ]
+                        },
+                        "swap": {
+                          "measurement": [
+                            "swap_used_percent"
+                          ]
+                        }
+                      }
+                    }
+                  }
+          # Invoke amazon-cloudwatch-agent-ctl to restart the AmazonCloudWatchAgent.
+          03_restart_amazon-cloudwatch-agent:
+            commands:
+              01_stop_service:
+                command: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a stop
+              02_start_service:
+                command: /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+          # Cfn-hup setting, it is to monitor the change of metadata.
+          # When there is change in the contents of json file in the metadata section, cfn-hup will call cfn-init to restart the AmazonCloudWatchAgent.
+          01_setupCfnHup:
+            files:
+              '/etc/cfn/cfn-hup.conf':
+                content: !Sub |
+                  [main]
+                  stack=${AWS::StackId}
+                  region=${AWS::Region}
+                  interval=1
+                mode: '000400'
+                owner: root
+                group: root
+              '/etc/cfn/hooks.d/amazon-cloudwatch-agent-auto-reloader.conf':
+                content: !Sub |
+                  [cfn-auto-reloader-hook]
+                  triggers=post.update
+                  path=Resources.EC2Instance.Metadata.AWS::CloudFormation::Init.02_config-amazon-cloudwatch-agent
+                  action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource EC2Instance --region ${AWS::Region} --configsets UpdateEnvironment
+                  runas=root
+                mode: '000400'
+                owner: root
+                group: root
+              "/lib/systemd/system/cfn-hup.service":
+                  content: !Sub |
+                    [Unit]
+                    Description=cfn-hup daemon
+                    [Service]
+                    Type=simple
+                    ExecStart=/opt/aws/bin/cfn-hup
+                    Restart=always
+                    [Install]
+                    WantedBy=multi-user.target
+            commands:
+              01enable_cfn_hup:
+                command: !Sub |
+                  systemctl enable cfn-hup.service
+              02start_cfn_hup:
+                command: !Sub |
+                  systemctl start cfn-hup.service
+      Properties:
+        InstanceType: "t2.small"
+        KeyName: "maam-app"
+        ImageId: "ami-0ce71448843cb18a1"
+        SecurityGroups:
+          - Ref: "AppSecurityGroup"
+        UserData:
+            # This script below is to install AmazonCloudWatchAgent, restart AmazonCloudWatchAgent and tell the result to cloudformation.
+            Fn::Base64: !Sub |
+              #!/bin/bash
+              rpm -Uvh https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+              /opt/aws/bin/cfn-init -v --stack ${AWS::StackId} --resource EC2Instance --region ${AWS::Region} --configsets default
+              /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackId} --resource EC2Instance --region ${AWS::Region}
+  
+########Create AutoScaling Group STG ##########
+  AutoScalingGroupSTG:          
+      Type: AWS::AutoScaling::AutoScalingGroup
+      Properties: 
+        LaunchConfigurationName: !Ref "LaunchConfig"
+        MinSize: "1"
+        MaxSize: "1"
+        TargetGroupARNs:
+          - !Ref "MaamTargetGroup1a"
+        VPCZoneIdentifier:
+          - !Ref "MaamPri1a"
+        Tags:
+          - Key: "Name"
+            Value: "maam-app-stg"
+            PropagateAtLaunch: "true"
+          - Key: "ENVIRONMENT"
+            Value: "STG"
+            PropagateAtLaunch: "true"
+      DependsOn: LaunchConfig
+
+####### Create AutoScaling Group PRD #########
+  AutoScalingGroupPRD:          
+      Type: AWS::AutoScaling::AutoScalingGroup
+      Properties: 
+        LaunchConfigurationName: !Ref "LaunchConfig"
+        MinSize: "1"
+        MaxSize: "1"
+        TargetGroupARNs:
+          - !Ref "MaamTargetGroup1b"
+        VPCZoneIdentifier:
+          - !Ref "MaamPri1b"
+        Tags:
+          - Key: "Name"
+            Value: "maam-app-prd"
+            PropagateAtLaunch: "true"
+          - Key: "ENVIRONMENT"
+            Value: "PRD"
+            PropagateAtLaunch: "true"
+      DependsOn: LaunchConfig
